@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FitVector /// BODY SCAN</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+    :root {
+      --bg-dark: #0a0a12;
+      --bg-grid: #12121c;
+      --neon-purple: #b829ff;
+      --neon-cyan: #00ffcc;
+      --neon-green: #39ff14;
+      --neon-pink: #ff3366;
+      --neon-yellow: #ffe135;
+      --text: #e0e0e0;
+      --text-dim: #666680;
+      --scanline: rgba(0, 0, 0, 0.15);
+      --border-px: 3px;
+    }
+
+    * {
+      box-sizing: border-box;
+      image-rendering: pixelated;
+    }
+
+    body {
+      min-height: 100vh;
+      font-family: 'Press Start 2P', monospace;
+      color: var(--text);
+      background:
+        repeating-linear-gradient(
+          0deg,
+          var(--scanline) 0px,
+          var(--scanline) 1px,
+          transparent 1px,
+          transparent 3px
+        ),
+        linear-gradient(180deg, var(--bg-dark) 0%, #1a1a2e 100%);
+      background-size: 100% 4px, 100% 100%;
+      line-height: 1.6;
+      padding: 20px;
+      position: relative;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: radial-gradient(ellipse at 50% 0%, rgba(184, 41, 255, 0.15) 0%, transparent 50%),
+                  radial-gradient(ellipse at 80% 80%, rgba(0, 255, 204, 0.1) 0%, transparent 40%);
+      pointer-events: none;
+      z-index: -1;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 0;
+      border-bottom: var(--border-px) solid var(--neon-purple);
+      margin-bottom: 32px;
+    }
+
+    .logo {
+      font-size: 1.2rem;
+      color: var(--neon-cyan);
+      text-shadow: 0 0 10px var(--neon-cyan);
+    }
+
+    .logo span {
+      color: var(--neon-purple);
+      text-shadow: 0 0 10px var(--neon-purple);
+    }
+
+    .nav-link {
+      font-size: 0.6rem;
+      color: var(--text-dim);
+      text-decoration: none;
+      border: 2px solid var(--text-dim);
+      padding: 8px 12px;
+      transition: all 0.1s;
+    }
+
+    .nav-link:hover {
+      color: var(--neon-cyan);
+      border-color: var(--neon-cyan);
+    }
+
+    .hero {
+      text-align: center;
+      margin-bottom: 32px;
+      padding: 24px;
+      border: var(--border-px) dashed var(--neon-cyan);
+      background: rgba(0, 255, 204, 0.05);
+    }
+
+    .hero h1 {
+      font-size: clamp(0.6rem, 2.5vw, 1.1rem);
+      color: var(--neon-cyan);
+      text-shadow: 2px 2px 0 var(--neon-purple);
+      margin-bottom: 12px;
+      line-height: 1.6;
+    }
+
+    .hero p {
+      font-size: 0.45rem;
+      color: var(--text-dim);
+      line-height: 1.8;
+    }
+
+    .scan-line {
+      width: 100%;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--neon-green), transparent);
+      margin: 16px 0;
+      animation: blink 1.5s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 0.3; }
+      50% { opacity: 1; }
+    }
+
+    .upload-section {
+      margin-bottom: 32px;
+    }
+
+    .input-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    @media (max-width: 600px) {
+      .input-row {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .field label {
+      display: block;
+      font-size: 0.55rem;
+      color: var(--neon-cyan);
+      margin-bottom: 8px;
+    }
+
+    .field input[type="number"] {
+      width: 100%;
+      padding: 12px;
+      font-family: inherit;
+      font-size: 0.7rem;
+      color: var(--text);
+      background: var(--bg-grid);
+      border: 2px solid var(--text-dim);
+    }
+
+    .field input:focus {
+      outline: none;
+      border-color: var(--neon-purple);
+      box-shadow: 0 0 10px rgba(184, 41, 255, 0.3);
+    }
+
+    .upload-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    @media (max-width: 600px) {
+      .upload-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .upload-box {
+      border: 3px dashed var(--text-dim);
+      padding: 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: var(--bg-grid);
+      position: relative;
+    }
+
+    .upload-box:hover {
+      border-color: var(--neon-purple);
+      background: rgba(184, 41, 255, 0.1);
+    }
+
+    .upload-box.has-file {
+      border-color: var(--neon-green);
+      border-style: solid;
+    }
+
+    .upload-box.has-file:hover {
+      border-color: var(--neon-green);
+    }
+
+    .upload-box__icon {
+      font-size: 2rem;
+      margin-bottom: 12px;
+    }
+
+    .upload-box__label {
+      font-size: 0.55rem;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+    }
+
+    .upload-box__hint {
+      font-size: 0.4rem;
+      color: var(--text-dim);
+      opacity: 0.6;
+    }
+
+    .upload-box input[type="file"] {
+      display: none;
+    }
+
+    .upload-preview {
+      max-width: 100%;
+      max-height: 200px;
+      object-fit: contain;
+      border: 2px solid var(--neon-green);
+      margin-top: 12px;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 14px;
+      font-family: inherit;
+      font-size: 0.65rem;
+      border: var(--border-px) solid var(--neon-purple);
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: all 0.1s;
+      background: var(--neon-purple);
+      color: white;
+    }
+
+    .btn:hover:not(:disabled) {
+      background: var(--neon-pink);
+      border-color: var(--neon-pink);
+      box-shadow: 0 0 20px var(--neon-pink);
+    }
+
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .loader {
+      display: none;
+      text-align: center;
+      padding: 32px;
+      font-size: 0.6rem;
+      color: var(--neon-cyan);
+    }
+
+    .loader.active {
+      display: block;
+    }
+
+    .loader__spinner {
+      display: inline-block;
+      width: 24px;
+      height: 24px;
+      border: 3px solid var(--text-dim);
+      border-top-color: var(--neon-cyan);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 12px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .error-box {
+      display: none;
+      border: 3px solid var(--neon-pink);
+      background: rgba(255, 51, 102, 0.1);
+      padding: 16px;
+      margin-bottom: 24px;
+      font-size: 0.55rem;
+      color: var(--neon-pink);
+    }
+
+    .error-box.visible {
+      display: block;
+    }
+
+    .results {
+      display: none;
+    }
+
+    .results.visible {
+      display: block;
+    }
+
+    .results__title {
+      font-size: 0.7rem;
+      color: var(--neon-green);
+      text-shadow: 0 0 8px var(--neon-green);
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: var(--border-px) solid var(--neon-green);
+    }
+
+    .results__meta {
+      font-size: 0.5rem;
+      color: var(--text-dim);
+      margin-bottom: 20px;
+    }
+
+    .results__meta span {
+      color: var(--neon-yellow);
+    }
+
+    .measure-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    @media (max-width: 600px) {
+      .measure-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .measure-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 12px;
+      background: var(--bg-grid);
+      border: 2px solid var(--text-dim);
+      font-size: 0.5rem;
+    }
+
+    .measure-item:hover {
+      border-color: var(--neon-purple);
+    }
+
+    .measure-item__label {
+      color: var(--text-dim);
+      flex: 1;
+    }
+
+    .measure-item__value {
+      color: var(--neon-green);
+      font-weight: bold;
+      text-shadow: 0 0 6px var(--neon-green);
+    }
+
+    .measure-group {
+      margin-bottom: 20px;
+    }
+
+    .measure-group__title {
+      font-size: 0.55rem;
+      color: var(--neon-purple);
+      margin-bottom: 8px;
+      text-shadow: 0 0 6px var(--neon-purple);
+    }
+
+    footer {
+      text-align: center;
+      padding: 20px 0;
+      border-top: var(--border-px) solid var(--text-dim);
+      font-size: 0.45rem;
+      color: var(--text-dim);
+      margin-top: 40px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo">FITVECTOR <span>///</span> BODY SCAN</div>
+      <a href="demo-shop.html" class="nav-link">[STORE]</a>
+    </header>
+
+    <div class="hero">
+      <h1>/// BODY MEASUREMENT TOOL ///</h1>
+      <p>UPLOAD FRONT + SIDE PHOTOS /// ENTER HEIGHT /// GET 25 BODY MEASUREMENTS</p>
+    </div>
+
+    <div class="scan-line"></div>
+
+    <section class="upload-section">
+      <div class="input-row">
+        <div class="field">
+          <label for="heightCm">HEIGHT (CM):</label>
+          <input type="number" id="heightCm" min="100" max="250" value="175" step="1" />
+        </div>
+        <div class="field">
+          <label for="weightKg">WEIGHT (KG) [OPTIONAL]:</label>
+          <input type="number" id="weightKg" min="30" max="300" step="0.1" placeholder="---" />
+        </div>
+      </div>
+
+      <div class="upload-grid">
+        <div class="upload-box" id="frontBox">
+          <div class="upload-box__icon">&#9650;</div>
+          <div class="upload-box__label">FRONT PHOTO</div>
+          <div class="upload-box__hint">FULL BODY · FRONT VIEW · JPEG/PNG</div>
+          <input type="file" id="frontInput" accept="image/jpeg,image/png,image/webp" />
+        </div>
+        <div class="upload-box" id="sideBox">
+          <div class="upload-box__icon">&#9654;</div>
+          <div class="upload-box__label">SIDE PHOTO</div>
+          <div class="upload-box__hint">FULL BODY · SIDE VIEW · JPEG/PNG</div>
+          <input type="file" id="sideInput" accept="image/jpeg,image/png,image/webp" />
+        </div>
+      </div>
+
+      <div class="error-box" id="errorBox"></div>
+
+      <button type="button" class="btn" id="measureBtn" disabled>[SCAN BODY]</button>
+    </section>
+
+    <div class="loader" id="loader">
+      <div class="loader__spinner"></div>
+      <p>/// SCANNING BODY ///</p>
+      <p id="loaderStatus">Analyzing photos...</p>
+    </div>
+
+    <div class="results" id="results">
+      <div class="results__title">/// MEASUREMENT RESULTS ///</div>
+      <div class="results__meta" id="resultsMeta"></div>
+
+      <div class="measure-group">
+        <div class="measure-group__title">/// HEAD & NECK ///</div>
+        <div class="measure-grid" id="groupHead"></div>
+      </div>
+
+      <div class="measure-group">
+        <div class="measure-group__title">/// TORSO ///</div>
+        <div class="measure-grid" id="groupTorso"></div>
+      </div>
+
+      <div class="measure-group">
+        <div class="measure-group__title">/// ARMS ///</div>
+        <div class="measure-grid" id="groupArms"></div>
+      </div>
+
+      <div class="measure-group">
+        <div class="measure-group__title">/// LEGS ///</div>
+        <div class="measure-grid" id="groupLegs"></div>
+      </div>
+
+      <div class="measure-group">
+        <div class="measure-group__title">/// CHEST DETAIL ///</div>
+        <div class="measure-grid" id="groupChest"></div>
+      </div>
+    </div>
+
+    <footer>
+      <p>/// FITVECTOR MVP /// BODY SCAN /// 2026 ///</p>
+      <p style="margin-top:8px;">MEASUREMENTS ARE ESTIMATES · FOR DEMO PURPOSES ONLY</p>
+    </footer>
+  </div>
+
+  <script>
+    (function () {
+      const API_URL = "https://fitvector-mvp-production.up.railway.app/measure";
+
+      const frontInput = document.getElementById("frontInput");
+      const sideInput = document.getElementById("sideInput");
+      const frontBox = document.getElementById("frontBox");
+      const sideBox = document.getElementById("sideBox");
+      const heightCm = document.getElementById("heightCm");
+      const weightKg = document.getElementById("weightKg");
+      const measureBtn = document.getElementById("measureBtn");
+      const loader = document.getElementById("loader");
+      const loaderStatus = document.getElementById("loaderStatus");
+      const errorBox = document.getElementById("errorBox");
+      const results = document.getElementById("results");
+      const resultsMeta = document.getElementById("resultsMeta");
+
+      let frontFile = null;
+      let sideFile = null;
+
+      const GROUPS = {
+        head: ["head_circumference", "neck_circumference"],
+        torso: [
+          "shoulder_width",
+          "chest_circumference",
+          "under_bust_circumference",
+          "waist_circumference",
+          "belly_circumference",
+          "hip_circumference",
+          "waist_height",
+          "hip_height",
+          "torso_length",
+        ],
+        arms: [
+          "shoulder_length",
+          "upper_arm_length",
+          "full_arm_length",
+          "bicep_circumference",
+          "forearm_circumference",
+          "wrist_circumference",
+        ],
+        legs: [
+          "upper_thigh_circumference",
+          "knee_circumference",
+          "calf_circumference",
+          "upper_leg_length",
+          "full_leg_length",
+          "inseam",
+        ],
+        chest: ["chest_width", "chest_depth"],
+      };
+
+      function checkReady() {
+        measureBtn.disabled = !(frontFile && sideFile && heightCm.value);
+      }
+
+      frontBox.addEventListener("click", function () {
+        frontInput.click();
+      });
+
+      sideBox.addEventListener("click", function () {
+        sideInput.click();
+      });
+
+      frontInput.addEventListener("change", function () {
+        frontFile = frontInput.files[0] || null;
+        frontBox.classList.toggle("has-file", !!frontFile);
+        if (frontFile) {
+          var existing = frontBox.querySelector(".upload-preview");
+          if (existing) existing.remove();
+          var img = document.createElement("img");
+          img.className = "upload-preview";
+          img.src = URL.createObjectURL(frontFile);
+          frontBox.appendChild(img);
+        }
+        checkReady();
+      });
+
+      sideInput.addEventListener("change", function () {
+        sideFile = sideInput.files[0] || null;
+        sideBox.classList.toggle("has-file", !!sideFile);
+        if (sideFile) {
+          var existing = sideBox.querySelector(".upload-preview");
+          if (existing) existing.remove();
+          var img = document.createElement("img");
+          img.className = "upload-preview";
+          img.src = URL.createObjectURL(sideFile);
+          sideBox.appendChild(img);
+        }
+        checkReady();
+      });
+
+      heightCm.addEventListener("input", checkReady);
+
+      function showError(msg) {
+        errorBox.textContent = msg;
+        errorBox.classList.add("visible");
+      }
+
+      function hideError() {
+        errorBox.classList.remove("visible");
+      }
+
+      function renderMeasurements(data) {
+        var m = data.measurements;
+        resultsMeta.innerHTML =
+          "HEIGHT: <span>" + data.height_cm + " cm</span> /// " +
+          "CONFIDENCE: <span>" + Math.round(data.confidence * 100) + "%</span> /// " +
+          "POSE: <span>" + (data.openpose_detected ? "DETECTED" : "ESTIMATED") + "</span>";
+
+        Object.keys(GROUPS).forEach(function (groupKey) {
+          var container = document.getElementById("group" + groupKey.charAt(0).toUpperCase() + groupKey.slice(1));
+          if (!container) return;
+          container.innerHTML = "";
+          GROUPS[groupKey].forEach(function (key) {
+            if (!m[key]) return;
+            var item = document.createElement("div");
+            item.className = "measure-item";
+            item.innerHTML =
+              '<span class="measure-item__label">' + m[key].label + '</span>' +
+              '<span class="measure-item__value">' + m[key].value + ' ' + m[key].unit + '</span>';
+            container.appendChild(item);
+          });
+        });
+
+        results.classList.add("visible");
+      }
+
+      measureBtn.addEventListener("click", async function () {
+        if (!frontFile || !sideFile) {
+          showError("/// UPLOAD BOTH PHOTOS ///");
+          return;
+        }
+
+        var h = parseFloat(heightCm.value);
+        if (!h || h < 100 || h > 250) {
+          showError("/// HEIGHT MUST BE 100-250 CM ///");
+          return;
+        }
+
+        hideError();
+        results.classList.remove("visible");
+        loader.classList.add("active");
+        loaderStatus.textContent = "Uploading photos...";
+        measureBtn.disabled = true;
+
+        var form = new FormData();
+        form.append("front", frontFile);
+        form.append("side", sideFile);
+        form.append("height_cm", h);
+        var w = parseFloat(weightKg.value);
+        if (w && w > 0) {
+          form.append("weight_kg", w);
+        }
+
+        try {
+          loaderStatus.textContent = "Analyzing with OpenPose...";
+          var response = await fetch(API_URL, {
+            method: "POST",
+            body: form,
+          });
+
+          if (!response.ok) {
+            var errData = await response.json().catch(function () { return null; });
+            var errMsg = errData && errData.detail
+              ? Array.isArray(errData.detail) ? errData.detail.join("; ") : String(errData.detail)
+              : "HTTP " + response.status;
+            throw new Error(errMsg);
+          }
+
+          loaderStatus.textContent = "Calculating measurements...";
+          var data = await response.json();
+          renderMeasurements(data);
+        } catch (err) {
+          showError("/// ERROR: " + err.message + " ///");
+        } finally {
+          loader.classList.remove("active");
+          measureBtn.disabled = false;
+          checkReady();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

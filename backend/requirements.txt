@@ -4,4 +4,6 @@ python-multipart
 # Клиент Supabase (PyPI: пакет называется supabase; в доках часто «supabase-py»)
 supabase
 python-dotenv
+replicate
+Pillow
 

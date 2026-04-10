@@ -18,9 +18,17 @@ from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+from measure import (
+    calculate_measurements,
+    get_confidence,
+    run_openpose_validation,
+    validate_all,
+)
 
 # Загружаем переменные из .env:
 # - сначала backend/.env (если есть)
@@ -89,7 +97,7 @@ def get_supabase_client() -> Optional[Any]:
         return None
 
 
-app = FastAPI(title="FitVector Size API", version="1.1.0")
+app = FastAPI(title="FitVector Size API", version="1.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -355,3 +363,46 @@ def calculate(payload: CalculateRequest) -> CalculateResponse:
     )
 
     return result
+
+
+class MeasureResponse(BaseModel):
+    height_cm: float
+    weight_kg: Optional[float] = None
+    openpose_detected: bool
+    confidence: float
+    measurements: dict[str, dict]
+
+
+@app.post("/measure", response_model=MeasureResponse)
+async def measure(
+    front: UploadFile = File(...),
+    side: UploadFile = File(...),
+    height_cm: float = Form(...),
+    weight_kg: Optional[float] = Form(None),
+):
+    front_bytes = await front.read()
+    side_bytes = await side.read()
+
+    validation = validate_all(front_bytes, side_bytes)
+    if not validation.valid:
+        raise HTTPException(status_code=400, detail=validation.errors)
+
+    openpose_ok = await run_openpose_validation(front_bytes)
+
+    measurements = calculate_measurements(
+        height_cm=height_cm,
+        weight_kg=weight_kg,
+    )
+
+    confidence = get_confidence(
+        openpose_validated=openpose_ok,
+        has_weight=weight_kg is not None,
+    )
+
+    return MeasureResponse(
+        height_cm=height_cm,
+        weight_kg=weight_kg,
+        openpose_detected=openpose_ok,
+        confidence=round(confidence, 2),
+        measurements=measurements,
+    )
