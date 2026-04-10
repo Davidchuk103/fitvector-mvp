@@ -26,45 +26,52 @@ MAX_PHOTO_SIZE = 10 * 1024 * 1024
 ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP"}
 
 MEASUREMENT_RATIOS: dict[str, float] = {
-    "head_circumference": 0.340,
-    "neck_circumference": 0.205,
-    "shoulder_width": 0.259,
-    "chest_circumference": 0.503,
-    "under_bust_circumference": 0.437,
-    "shoulder_length": 0.078,
+    "head_circumference": 0.326,
+    "neck_circumference": 0.217,
+    "shoulder_width": 0.257,
+    "chest_circumference": 0.557,
+    "under_bust_circumference": 0.480,
+    "shoulder_length": 0.091,
     "upper_arm_length": 0.186,
     "full_arm_length": 0.368,
-    "bicep_circumference": 0.163,
-    "forearm_circumference": 0.129,
-    "wrist_circumference": 0.095,
-    "waist_circumference": 0.440,
-    "belly_circumference": 0.470,
-    "hip_circumference": 0.535,
-    "waist_height": 0.530,
-    "hip_height": 0.500,
+    "bicep_circumference": 0.171,
+    "forearm_circumference": 0.143,
+    "wrist_circumference": 0.094,
+    "waist_circumference": 0.463,
+    "belly_circumference": 0.491,
+    "hip_circumference": 0.554,
+    "waist_height": 0.600,
+    "hip_height": 0.510,
     "torso_length": 0.300,
-    "upper_thigh_circumference": 0.325,
-    "knee_circumference": 0.190,
+    "upper_thigh_circumference": 0.320,
+    "knee_circumference": 0.206,
     "calf_circumference": 0.200,
     "upper_leg_length": 0.245,
     "full_leg_length": 0.530,
     "inseam": 0.470,
-    "chest_width": 0.175,
-    "chest_depth": 0.125,
+    "chest_width": 0.183,
+    "chest_depth": 0.126,
 }
 
 BMI_ADJUSTMENTS: dict[str, float] = {
-    "chest_circumference": 0.020,
-    "under_bust_circumference": 0.015,
-    "bicep_circumference": 0.020,
-    "forearm_circumference": 0.010,
-    "waist_circumference": 0.040,
-    "belly_circumference": 0.050,
-    "hip_circumference": 0.030,
-    "upper_thigh_circumference": 0.030,
-    "knee_circumference": 0.010,
-    "calf_circumference": 0.010,
+    "neck_circumference": 0.006,
+    "shoulder_width": 0.008,
+    "chest_circumference": 0.010,
+    "under_bust_circumference": 0.010,
+    "bicep_circumference": 0.010,
+    "forearm_circumference": 0.008,
+    "wrist_circumference": 0.003,
+    "waist_circumference": 0.015,
+    "belly_circumference": 0.018,
+    "hip_circumference": 0.010,
+    "upper_thigh_circumference": 0.010,
+    "knee_circumference": 0.005,
+    "calf_circumference": 0.005,
+    "chest_width": 0.006,
+    "chest_depth": 0.012,
 }
+
+BMI_REF = 22.5
 
 MEASUREMENT_LABELS: dict[str, str] = {
     "head_circumference": "Обхват головы",
@@ -206,6 +213,18 @@ async def run_openpose_validation(image_bytes: bytes) -> bool:
         return False
 
 
+WEIGHT_CIRCUMFERENCE_CORRECTION: dict[str, float] = {
+    "waist_circumference": 0.35,
+    "belly_circumference": 0.40,
+    "chest_circumference": 0.20,
+    "under_bust_circumference": 0.18,
+    "hip_circumference": 0.28,
+    "upper_thigh_circumference": 0.22,
+    "bicep_circumference": 0.10,
+    "neck_circumference": 0.08,
+}
+
+
 def calculate_measurements(
     height_cm: float,
     weight_kg: Optional[float] = None,
@@ -217,14 +236,21 @@ def calculate_measurements(
         height_m = height_cm / 100.0
         bmi = weight_kg / (height_m * height_m)
 
+    ref_weight = (BMI_REF / 10000.0) * (height_cm * height_cm)
+
     for key, ratio in MEASUREMENT_RATIOS.items():
-        value = round(height_cm * ratio, 1)
+        value = height_cm * ratio
 
         if bmi is not None and key in BMI_ADJUSTMENTS:
-            bmi_offset = bmi - 22.0
-            if bmi_offset > 0:
-                adjustment = 1.0 + BMI_ADJUSTMENTS[key] * bmi_offset
-                value = round(value * adjustment, 1)
+            bmi_offset = bmi - BMI_REF
+            adjustment = 1.0 + BMI_ADJUSTMENTS[key] * bmi_offset
+            value = value * adjustment
+
+        if weight_kg is not None and key in WEIGHT_CIRCUMFERENCE_CORRECTION:
+            weight_diff = weight_kg - ref_weight
+            value = value + WEIGHT_CIRCUMFERENCE_CORRECTION[key] * weight_diff
+
+        value = round(max(value, 1.0), 1)
 
         measurements[key] = {
             "label": MEASUREMENT_LABELS.get(key, key),
