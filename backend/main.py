@@ -36,17 +36,20 @@ logger = logging.getLogger(__name__)
 # Имя файла SQLite-базы в папке backend (fallback)
 DB_PATH = str(_backend_dir / "sessions.db")
 
-# --- Supabase: где взять URL и ключ ---
+# --- Supabase (supabase-py / pip install supabase) ---
 # Dashboard → Project Settings → API:
-#   Project URL  → SUPABASE_URL
-#   anon public / service_role — в переменную SUPABASE_KEY (как в задании)
-#   или отдельно SUPABASE_SERVICE_ROLE_KEY / SUPABASE_ANON_KEY (удобно для .env)
-# Для INSERT с сервера без настройки RLS чаще используют service_role (никогда не светить во фронт).
+#   Project URL → SUPABASE_URL
+#   Ключ API   → SUPABASE_KEY (часто подставляют service_role для бэкенда)
+#   Альтернатива: SUPABASE_SERVICE_ROLE_KEY / SUPABASE_ANON_KEY
 _supabase_client: Optional[Any] = None
 _supabase_tried_init = False
 
 
 def _resolve_supabase_key() -> Optional[str]:
+    """
+    Ключ API: в задании — SUPABASE_KEY (часто кладут service_role для бэкенда).
+    Дополнительно поддерживаем старые имена переменных.
+    """
     return (
         os.getenv("SUPABASE_KEY")
         or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -56,8 +59,9 @@ def _resolve_supabase_key() -> Optional[str]:
 
 def get_supabase_client() -> Optional[Any]:
     """
-    Ленивая инициализация клиента supabase-py.
-    Если URL/ключ не заданы — None (работаем только с SQLite).
+    Ленивая инициализация клиента supabase-py (пакет pip: supabase).
+    Нужны SUPABASE_URL и SUPABASE_KEY (см. Project Settings → API).
+    Если не заданы — None (только SQLite).
     """
     global _supabase_client, _supabase_tried_init
 
@@ -68,7 +72,9 @@ def get_supabase_client() -> Optional[Any]:
     url = os.getenv("SUPABASE_URL")
     key = _resolve_supabase_key()
     if not url or not key:
-        logger.info("Supabase: SUPABASE_URL или ключ не заданы — только SQLite.")
+        logger.info(
+            "Supabase: задайте SUPABASE_URL и SUPABASE_KEY — иначе только SQLite."
+        )
         _supabase_client = None
         return None
 
@@ -114,7 +120,7 @@ class StatsResponse(BaseModel):
     """Сводка по сохранённым сессиям."""
 
     total_sessions: int
-    # S/M/L/XL по заданию; XXL добавлен, чтобы не терять записи сверх XL
+    # Только S, M, L, XL — размер XXL в ответе суммируется в XL
     size_distribution: dict[str, int]
     avg_confidence: float
 
@@ -127,8 +133,8 @@ SIZE_RANGES = [
     {"size": "XXL", "min": 104, "max": 140, "include_max": True},
 ]
 
-# Ключи для ответа /stats (S–XL по заданию; XXL учитываем отдельно в словаре)
-STATS_SIZE_KEYS = ("S", "M", "L", "XL", "XXL")
+# Ответ /stats: только S, M, L, XL (XXL включаем в счётчик XL)
+STATS_SIZE_KEYS = ("S", "M", "L", "XL")
 
 
 def init_db() -> None:
@@ -238,6 +244,16 @@ def persist_session(
     log_session_sqlite(height, weight, waist, size, confidence, method)
 
 
+def _merge_size_distribution(raw: dict[str, int]) -> dict[str, int]:
+    """Приводит распределение к ключам S, M, L, XL (XXL → XL)."""
+    return {
+        "S": int(raw.get("S", 0)),
+        "M": int(raw.get("M", 0)),
+        "L": int(raw.get("L", 0)),
+        "XL": int(raw.get("XL", 0)) + int(raw.get("XXL", 0)),
+    }
+
+
 def _stats_from_sqlite() -> StatsResponse:
     with sqlite3.connect(DB_PATH) as connection:
         cursor = connection.cursor()
@@ -246,15 +262,15 @@ def _stats_from_sqlite() -> StatsResponse:
         total = int(total or 0)
         avg_confidence = float(avg_c) if avg_c is not None else 0.0
 
-        dist = {k: 0 for k in STATS_SIZE_KEYS}
+        dist_full: dict[str, int] = {"S": 0, "M": 0, "L": 0, "XL": 0, "XXL": 0}
         cursor.execute("SELECT size, COUNT(*) FROM sessions GROUP BY size")
         for size, cnt in cursor.fetchall():
-            if size in dist:
-                dist[size] = int(cnt)
+            if size in dist_full:
+                dist_full[size] = int(cnt)
 
     return StatsResponse(
         total_sessions=total,
-        size_distribution={k: dist[k] for k in STATS_SIZE_KEYS},
+        size_distribution=_merge_size_distribution(dist_full),
         avg_confidence=round(avg_confidence, 4) if total else 0.0,
     )
 
@@ -270,12 +286,12 @@ def _stats_from_supabase(client: Any) -> StatsResponse:
             avg_confidence=0.0,
         )
 
-    dist = {k: 0 for k in STATS_SIZE_KEYS}
+    dist_full = {"S": 0, "M": 0, "L": 0, "XL": 0, "XXL": 0}
     conf_sum = 0.0
     for row in rows:
         s = row.get("size")
-        if s in dist:
-            dist[s] += 1
+        if s in dist_full:
+            dist_full[s] += 1
         c = row.get("confidence")
         if c is not None:
             conf_sum += float(c)
@@ -283,7 +299,7 @@ def _stats_from_supabase(client: Any) -> StatsResponse:
     avg_confidence = conf_sum / total
     return StatsResponse(
         total_sessions=total,
-        size_distribution={k: dist[k] for k in STATS_SIZE_KEYS},
+        size_distribution=_merge_size_distribution(dist_full),
         avg_confidence=round(avg_confidence, 4),
     )
 
