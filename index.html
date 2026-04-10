@@ -208,6 +208,55 @@
       font-size: 1rem;
     }
 
+    /* Подсказка (fallback, метод API) */
+    .status-hint {
+      font-size: 0.88rem;
+      color: #e9c46c;
+      margin-top: 4px;
+      min-height: 1.2em;
+    }
+
+    /* Блок лоадера во время запроса к API */
+    .loader-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      min-height: 72px;
+      color: var(--text-muted);
+      font-size: 1rem;
+    }
+
+    .loader-wrap[hidden] {
+      display: none !important;
+    }
+
+    .result-content[hidden] {
+      display: none !important;
+    }
+
+    .spinner {
+      width: 24px;
+      height: 24px;
+      border: 3px solid rgba(255, 255, 255, 0.2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .btn:disabled {
+      opacity: 0.75;
+      cursor: not-allowed;
+      transform: none;
+      animation: none;
+    }
+
     /* Адаптация интерфейса под узкие мобильные экраны */
     @media (max-width: 400px) {
       body {
@@ -280,13 +329,24 @@
     <section class="actions">
       <button id="calcBtn" class="btn" type="button">Подобрать размер</button>
       <div class="result" aria-live="polite">
-        <div id="sizeResult" class="size">M</div>
-        <div id="confidenceResult" class="confidence">Уверенность: 90%</div>
+        <div id="loader" class="loader-wrap" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Загрузка...</span>
+        </div>
+        <div id="resultContent" class="result-content">
+          <div id="sizeResult" class="size">M</div>
+          <div id="confidenceResult" class="confidence">Уверенность: 90%</div>
+          <div id="statusHint" class="status-hint"></div>
+        </div>
       </div>
     </section>
   </main>
 
   <script>
+    // URL бэкенда на Railway (POST /calculate)
+    const API_URL = "https://fitvector-mvp-production.up.railway.app/calculate";
+    const REQUEST_TIMEOUT_MS = 8000;
+
     // Получаем ссылки на элементы управления и вывода результата
     const heightInput = document.getElementById("height");
     const weightInput = document.getElementById("weight");
@@ -295,8 +355,11 @@
     const weightValue = document.getElementById("weightValue");
     const waistValue = document.getElementById("waistValue");
     const calcBtn = document.getElementById("calcBtn");
+    const loaderEl = document.getElementById("loader");
+    const resultContent = document.getElementById("resultContent");
     const sizeResult = document.getElementById("sizeResult");
     const confidenceResult = document.getElementById("confidenceResult");
+    const statusHint = document.getElementById("statusHint");
 
     // Описываем диапазоны талии для каждого размера
     const sizeRanges = [
@@ -338,15 +401,81 @@
       return Math.max(0.6, Math.min(0.9, confidence));
     }
 
-    // Выполняем расчет и показываем размер с уровнем уверенности
-    function calculateAndRenderSize() {
+    // Локальный расчёт (fallback, если API недоступен)
+    function renderLocalSize() {
       const waist = Number(waistInput.value);
       const foundRange = getSizeByWaist(waist);
       const confidence = calculateConfidence(waist, foundRange);
       const confidencePercent = Math.round(confidence * 100);
 
       sizeResult.textContent = foundRange.size;
-      confidenceResult.textContent = `Уверенность: ${confidencePercent}%`;
+      confidenceResult.textContent = `Уверенность: ${confidencePercent}% (локально)`;
+    }
+
+    function setLoading(isLoading) {
+      loaderEl.hidden = !isLoading;
+      resultContent.hidden = isLoading;
+      calcBtn.disabled = isLoading;
+    }
+
+    async function fetchSizeFromApi() {
+      const body = {
+        height: Number(heightInput.value),
+        weight: Number(weightInput.value),
+        waist: Number(waistInput.value),
+      };
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+      try {
+        const response = await fetch(API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (
+          !data ||
+          typeof data.size !== "string" ||
+          typeof data.confidence !== "number"
+        ) {
+          throw new Error("Invalid response");
+        }
+        return data;
+      } catch (err) {
+        clearTimeout(timeoutId);
+        throw err;
+      }
+    }
+
+    async function onCalculateClick() {
+      statusHint.textContent = "";
+      setLoading(true);
+
+      try {
+        const data = await fetchSizeFromApi();
+        const pct = Math.round(Number(data.confidence) * 100);
+        const method = data.method != null ? String(data.method) : "—";
+
+        sizeResult.textContent = data.size;
+        confidenceResult.textContent = `Уверенность: ${pct}% · метод: ${method}`;
+      } catch (err) {
+        statusHint.textContent = "Пробуем локально...";
+        renderLocalSize();
+        window.setTimeout(() => {
+          statusHint.textContent = "";
+        }, 3500);
+      } finally {
+        setLoading(false);
+      }
     }
 
     // Подписываемся на ввод, чтобы обновлять числа у ползунков мгновенно
@@ -354,12 +483,12 @@
       input.addEventListener("input", syncSliderLabels);
     });
 
-    // Подписываем кнопку на запуск расчета размера
-    calcBtn.addEventListener("click", calculateAndRenderSize);
+    // Кнопка: запрос к API, при ошибке — локальный алгоритм
+    calcBtn.addEventListener("click", onCalculateClick);
 
-    // Выполняем первичную инициализацию виджета при загрузке страницы
+    // Первичная инициализация: подписи ползунков и стартовый локальный превью
     syncSliderLabels();
-    calculateAndRenderSize();
+    renderLocalSize();
   </script>
 </body>
 </html>
