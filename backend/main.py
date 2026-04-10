@@ -26,7 +26,6 @@ from pydantic import BaseModel
 from measure import (
     calculate_measurements,
     get_confidence,
-    run_openpose_validation,
     validate_all,
 )
 
@@ -368,7 +367,7 @@ def calculate(payload: CalculateRequest) -> CalculateResponse:
 class MeasureResponse(BaseModel):
     height_cm: float
     weight_kg: Optional[float] = None
-    openpose_detected: bool
+    cv_detected: bool
     confidence: float
     measurements: dict[str, dict]
 
@@ -387,22 +386,22 @@ async def measure(
     if not validation.valid:
         raise HTTPException(status_code=400, detail=validation.errors)
 
-    openpose_ok = await run_openpose_validation(front_bytes)
-
-    measurements = calculate_measurements(
+    measurements, cv_detected = calculate_measurements(
         height_cm=height_cm,
         weight_kg=weight_kg,
+        front_bytes=front_bytes,
+        side_bytes=side_bytes,
     )
 
     confidence = get_confidence(
-        openpose_validated=openpose_ok,
+        cv_detected=cv_detected,
         has_weight=weight_kg is not None,
     )
 
     return MeasureResponse(
         height_cm=height_cm,
         weight_kg=weight_kg,
-        openpose_detected=openpose_ok,
+        cv_detected=cv_detected,
         confidence=round(confidence, 2),
         measurements=measurements,
     )

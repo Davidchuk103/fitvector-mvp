@@ -6,4 +6,7 @@ supabase
 python-dotenv
 replicate
 Pillow
+mediapipe
+opencv-python-headless
+numpy
 
