@@ -324,49 +324,6 @@ def preprocess_image(image_bytes: bytes) -> Optional[np.ndarray]:
     return result
 
 
-def preprocess_image(image_bytes: bytes) -> Optional[np.ndarray]:
-    img = _image_bytes_to_cv2(image_bytes)
-    if img is None:
-        return None
-
-    if _REMBG_AVAILABLE:
-        try:
-            input_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-            output_pil = rembg_remove(input_pil)
-            output_bytes = io.BytesIO()
-            output_pil.save(output_bytes, format="PNG")
-            output_bytes.seek(0)
-            arr = np.frombuffer(output_bytes.read(), dtype=np.uint8)
-            img_no_bg = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
-            if img_no_bg is not None:
-                if img_no_bg.shape[2] == 4:
-                    b, g, r, a = cv2.split(img_no_bg)
-                    mask = (a > 128).astype(np.uint8) * 255
-                    img_no_bg = cv2.merge([b, g, r])
-                    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-                    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-                    mask_3ch = cv2.merge([mask, mask, mask])
-                    img_no_bg = cv2.bitwise_and(img_no_bg, mask_3ch)
-                    img = img_no_bg
-        except Exception as exc:
-            logger.warning("Background removal failed, using original: %s", exc)
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    enhanced_gray = clahe.apply(gray)
-    enhanced_bgr = cv2.cvtColor(enhanced_gray, cv2.COLOR_GRAY2BGR)
-
-    if img.shape[:2] != enhanced_bgr.shape[:2]:
-        enhanced_bgr = cv2.resize(enhanced_bgr, (img.shape[1], img.shape[0]))
-
-    mask = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    _, mask = cv2.threshold(mask, 1, 255, cv2.THRESH_BINARY)
-    mask_3ch = cv2.merge([mask, mask, mask])
-    result = cv2.bitwise_and(enhanced_bgr, mask_3ch)
-
-    return result
-
-
 def run_mediapipe_pose(image_bytes: bytes, preprocessed: Optional[np.ndarray] = None) -> Optional[Landmarks]:
     if not _MP_AVAILABLE:
         logger.warning("MediaPipe not installed, skipping pose detection")
