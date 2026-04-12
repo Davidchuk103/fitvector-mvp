@@ -416,22 +416,3 @@ async def measure(
         pose_issues=extra_info.get("pose_issues", []),
         measurements=measurements,
     )
-
-    confidence = get_confidence(
-        cv_detected=cv_detected,
-        has_weight=weight_kg is not None,
-        pose_score=extra_info.get("pose_score", 0.0),
-        visibility_ratio=extra_info.get("front_visibility", 0.0),
-        gender_known=gender in ("male", "female"),
-    )
-
-    return MeasureResponse(
-        height_cm=height_cm,
-        weight_kg=weight_kg,
-        gender=gender,
-        cv_detected=cv_detected,
-        confidence=round(confidence, 2),
-        pose_score=extra_info.get("pose_score", 0.0),
-        pose_issues=extra_info.get("pose_issues", []),
-        measurements=measurements,
-    )
