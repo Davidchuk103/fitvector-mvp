@@ -57,6 +57,9 @@ HEAD_RATIO_MIN = 0.048
 HEAD_RATIO_MAX = 0.058
 HEAD_RATIO_DEFAULT = 0.052
 
+SHOULDER_WIDTH_CORRECTION = 1.10
+HIP_WIDTH_CORRECTION = 1.15
+
 BMI_REF = 22.5
 
 MALE_BODY_RATIOS = {
@@ -665,7 +668,7 @@ def calculate_cv_measurements(
     mid_hip = front.get(23) or front.get(24)
 
     shoulder_w_px = front.pixel_dist(11, 12)
-    shoulder_width = shoulder_w_px * front_scale if shoulder_w_px else None
+    shoulder_width = shoulder_w_px * front_scale * SHOULDER_WIDTH_CORRECTION if shoulder_w_px else None
 
     neck_l = front.get(11)
     neck_r = front.get(12)
@@ -705,7 +708,7 @@ def calculate_cv_measurements(
     l_hip = front.get(23)
     r_hip = front.get(24)
     hip_width_px = front.horizontal_dist(23, 24) if l_hip and r_hip else None
-    hip_width = hip_width_px * front_scale * 0.5 if hip_width_px else None
+    hip_width = hip_width_px * front_scale * 0.5 * HIP_WIDTH_CORRECTION if hip_width_px else None
 
     hip_depth_px = side.horizontal_dist(23, 24) if side.get(23) and side.get(24) else None
     hip_depth = hip_depth_px * side_scale * 0.5 if hip_depth_px else None
@@ -968,6 +971,8 @@ def calculate_cv_measurements(
         "scale_factor": round(front_scale, 4),
         "scale_method": front_debug.get("method", "unknown"),
         "contour_method": contour_method,
+        "shoulder_correction": SHOULDER_WIDTH_CORRECTION,
+        "hip_correction": HIP_WIDTH_CORRECTION,
     }
     
     return measurements, debug_output
