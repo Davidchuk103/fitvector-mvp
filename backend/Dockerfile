@@ -1,6 +1,16 @@
 # Базовый образ Python 3.11
 FROM python:3.11-slim
 
+# Системные зависимости для mediapipe и opencv-python-headless:
+# libGL.so.1    → нужна opencv/mediapipe
+# libglib2.0-0  → нужна glib (mediapipe)
+# libgomp1      → OpenMP (numpy, mediapipe)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Рабочая директория внутри контейнера
 WORKDIR /app
 
