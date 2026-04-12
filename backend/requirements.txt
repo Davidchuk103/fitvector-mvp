@@ -1,7 +1,6 @@
 fastapi
 uvicorn
 python-multipart
-# Клиент Supabase (PyPI: пакет называется supabase; в доках часто «supabase-py»)
 supabase
 python-dotenv
 replicate
@@ -9,4 +8,8 @@ Pillow
 mediapipe
 opencv-python-headless
 numpy
+rembg
+onnxruntime
+rembg
+onnxruntime
 

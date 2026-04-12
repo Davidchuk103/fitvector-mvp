@@ -367,8 +367,11 @@ def calculate(payload: CalculateRequest) -> CalculateResponse:
 class MeasureResponse(BaseModel):
     height_cm: float
     weight_kg: Optional[float] = None
+    gender: Optional[str] = None
     cv_detected: bool
     confidence: float
+    pose_score: float
+    pose_issues: list[str]
     measurements: dict[str, dict]
 
 
@@ -378,6 +381,7 @@ async def measure(
     side: UploadFile = File(...),
     height_cm: float = Form(...),
     weight_kg: Optional[float] = Form(None),
+    gender: Optional[str] = Form("unknown"),
 ):
     front_bytes = await front.read()
     side_bytes = await side.read()
@@ -386,22 +390,48 @@ async def measure(
     if not validation.valid:
         raise HTTPException(status_code=400, detail=validation.errors)
 
-    measurements, cv_detected = calculate_measurements(
+    measurements, cv_detected, extra_info = calculate_measurements(
         height_cm=height_cm,
         weight_kg=weight_kg,
         front_bytes=front_bytes,
         side_bytes=side_bytes,
+        gender=gender or "unknown",
     )
 
     confidence = get_confidence(
         cv_detected=cv_detected,
         has_weight=weight_kg is not None,
+        pose_score=extra_info.get("pose_score", 0.0),
+        visibility_ratio=extra_info.get("front_visibility", 0.0),
+        gender_known=gender in ("male", "female"),
     )
 
     return MeasureResponse(
         height_cm=height_cm,
         weight_kg=weight_kg,
+        gender=gender,
         cv_detected=cv_detected,
         confidence=round(confidence, 2),
+        pose_score=extra_info.get("pose_score", 0.0),
+        pose_issues=extra_info.get("pose_issues", []),
+        measurements=measurements,
+    )
+
+    confidence = get_confidence(
+        cv_detected=cv_detected,
+        has_weight=weight_kg is not None,
+        pose_score=extra_info.get("pose_score", 0.0),
+        visibility_ratio=extra_info.get("front_visibility", 0.0),
+        gender_known=gender in ("male", "female"),
+    )
+
+    return MeasureResponse(
+        height_cm=height_cm,
+        weight_kg=weight_kg,
+        gender=gender,
+        cv_detected=cv_detected,
+        confidence=round(confidence, 2),
+        pose_score=extra_info.get("pose_score", 0.0),
+        pose_issues=extra_info.get("pose_issues", []),
         measurements=measurements,
     )

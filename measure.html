@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="ru">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -31,13 +32,11 @@
       font-family: 'Press Start 2P', monospace;
       color: var(--text);
       background:
-        repeating-linear-gradient(
-          0deg,
+        repeating-linear-gradient(0deg,
           var(--scanline) 0px,
           var(--scanline) 1px,
           transparent 1px,
-          transparent 3px
-        ),
+          transparent 3px),
         linear-gradient(180deg, var(--bg-dark) 0%, #1a1a2e 100%);
       background-size: 100% 4px, 100% 100%;
       line-height: 1.6;
@@ -50,7 +49,7 @@
       position: fixed;
       inset: 0;
       background: radial-gradient(ellipse at 50% 0%, rgba(184, 41, 255, 0.15) 0%, transparent 50%),
-                  radial-gradient(ellipse at 80% 80%, rgba(0, 255, 204, 0.1) 0%, transparent 40%);
+        radial-gradient(ellipse at 80% 80%, rgba(0, 255, 204, 0.1) 0%, transparent 40%);
       pointer-events: none;
       z-index: -1;
     }
@@ -125,8 +124,15 @@
     }
 
     @keyframes blink {
-      0%, 100% { opacity: 0.3; }
-      50% { opacity: 1; }
+
+      0%,
+      100% {
+        opacity: 0.3;
+      }
+
+      50% {
+        opacity: 1;
+      }
     }
 
     .upload-section {
@@ -283,7 +289,9 @@
     }
 
     @keyframes spin {
-      to { transform: rotate(360deg); }
+      to {
+        transform: rotate(360deg);
+      }
     }
 
     .error-box {
@@ -298,6 +306,29 @@
 
     .error-box.visible {
       display: block;
+    }
+
+    .pose-warning {
+      display: none;
+      border: 3px solid var(--neon-yellow);
+      background: rgba(255, 225, 53, 0.1);
+      padding: 16px;
+      margin-bottom: 24px;
+      font-size: 0.55rem;
+      color: var(--neon-yellow);
+    }
+
+    .pose-warning.visible {
+      display: block;
+    }
+
+    .pose-warning ul {
+      margin: 8px 0 0 16px;
+      padding: 0;
+    }
+
+    .pose-warning li {
+      margin-bottom: 4px;
     }
 
     .results {
@@ -385,6 +416,7 @@
     }
   </style>
 </head>
+
 <body>
   <div class="container">
     <header>
@@ -411,6 +443,34 @@
         </div>
       </div>
 
+      <div class="input-row" style="margin-bottom:20px;">
+        <div class="field">
+          <label for="genderSelect">GENDER [OPTIONAL]:</label>
+          <select id="genderSelect" style="width:100%;padding:12px;font-family:inherit;font-size:0.7rem;color:var(--text);background:var(--bg-grid);border:2px solid var(--text-dim);">
+            <option value="unknown">Not specified</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+          </select>
+        </div>
+        <div class="field" style="display:flex;align-items:flex-end;">
+          <div style="font-size:0.4rem;color:var(--text-dim);opacity:0.6;">Improves measurement accuracy</div>
+        </div>
+      </div>
+
+      <div class="input-row" style="margin-bottom:20px;">
+        <div class="field">
+          <label for="genderSelect">GENDER [OPTIONAL]:</label>
+          <select id="genderSelect" style="width:100%;padding:12px;font-family:inherit;font-size:0.7rem;color:var(--text);background:var(--bg-grid);border:2px solid var(--text-dim);">
+            <option value="unknown">Not specified</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+          </select>
+        </div>
+        <div class="field" style="display:flex;align-items:flex-end;">
+          <div style="font-size:0.4rem;color:var(--text-dim);opacity:0.6;">Improves measurement accuracy</div>
+        </div>
+      </div>
+
       <div class="upload-grid">
         <div class="upload-box" id="frontBox">
           <div class="upload-box__icon">&#9650;</div>
@@ -427,6 +487,11 @@
       </div>
 
       <div class="error-box" id="errorBox"></div>
+
+      <div class="pose-warning" id="poseWarning">
+        <p>/// POSE QUALITY WARNINGS ///</p>
+        <ul id="poseWarningList"></ul>
+      </div>
 
       <button type="button" class="btn" id="measureBtn" disabled>[SCAN BODY]</button>
     </section>
@@ -483,10 +548,13 @@
       const sideBox = document.getElementById("sideBox");
       const heightCm = document.getElementById("heightCm");
       const weightKg = document.getElementById("weightKg");
+      const genderSelect = document.getElementById("genderSelect");
       const measureBtn = document.getElementById("measureBtn");
       const loader = document.getElementById("loader");
       const loaderStatus = document.getElementById("loaderStatus");
       const errorBox = document.getElementById("errorBox");
+      const poseWarning = document.getElementById("poseWarning");
+      const poseWarningList = document.getElementById("poseWarningList");
       const results = document.getElementById("results");
       const resultsMeta = document.getElementById("resultsMeta");
 
@@ -581,7 +649,20 @@
         resultsMeta.innerHTML =
           "HEIGHT: <span>" + data.height_cm + " cm</span> /// " +
           "CONFIDENCE: <span>" + Math.round(data.confidence * 100) + "%</span> /// " +
-          "POSE: <span>" + (data.openpose_detected ? "DETECTED" : "ESTIMATED") + "</span>";
+          "POSE: <span>" + (data.cv_detected ? "DETECTED" : "ESTIMATED") + "</span> /// " +
+          "POSE SCORE: <span>" + (data.pose_score || 0) + "</span>";
+
+        if (data.pose_issues && data.pose_issues.length > 0) {
+          poseWarningList.innerHTML = "";
+          data.pose_issues.forEach(function(issue) {
+            var li = document.createElement("li");
+            li.textContent = issue;
+            poseWarningList.appendChild(li);
+          });
+          poseWarning.classList.add("visible");
+        } else {
+          poseWarning.classList.remove("visible");
+        }
 
         Object.keys(GROUPS).forEach(function (groupKey) {
           var container = document.getElementById("group" + groupKey.charAt(0).toUpperCase() + groupKey.slice(1));
@@ -627,6 +708,14 @@
         if (w && w > 0) {
           form.append("weight_kg", w);
         }
+        var g = genderSelect.value;
+        if (g && g !== "unknown") {
+          form.append("gender", g);
+        }
+        var g = genderSelect.value;
+        if (g && g !== "unknown") {
+          form.append("gender", g);
+        }
 
         try {
           loaderStatus.textContent = "Analyzing with OpenPose...";
@@ -657,4 +746,5 @@
     })();
   </script>
 </body>
+
 </html>

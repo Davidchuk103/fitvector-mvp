@@ -3,13 +3,15 @@ Body measurement estimation from 2 photos (front + side) + height.
 
 Pipeline:
 1. Validate photos (format, size, dimensions)
-2. Run MediaPipe Pose on front photo -> extract 33 landmarks
-3. Run MediaPipe Pose on side photo -> extract 33 landmarks
-4. Calibrate pixel-to-cm scale using known height
-5. Calculate linear measurements from keypoint distances
-6. Calculate circumferences using Ramanujan ellipse formula
-   (front photo = width, side photo = depth)
-7. Fall back to anthropometric formulas if CV fails
+2. Preprocess images (background removal + contrast normalization)
+3. Run MediaPipe Pose on front photo -> extract 33 landmarks
+4. Run MediaPipe Pose on side photo -> extract 33 landmarks
+5. Validate pose quality (standing straight, arms at sides)
+6. Calibrate pixel-to-cm scale using multi-point calibration
+7. Calculate linear measurements from keypoint distances
+8. Calculate circumferences using body contour tracing + Ramanujan ellipse
+9. Apply gender-specific corrections
+10. Fall back to anthropometric formulas if CV fails
 """
 
 from __future__ import annotations
@@ -32,16 +34,40 @@ except ImportError:
     _MP_AVAILABLE = False
     mp_pose_pkg = None
 
+try:
+    from rembg import remove as rembg_remove
+
+    _REMBG_AVAILABLE = True
+except ImportError:
+    _REMBG_AVAILABLE = False
+    rembg_remove = None
+
 logger = logging.getLogger(__name__)
 
 MIN_PHOTO_DIMENSION = 256
 MAX_PHOTO_SIZE = 10 * 1024 * 1024
 ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP"}
-MIN_LANDMARKK_VISIBILITY = 0.5
+MIN_LANDMARK_VISIBILITY = 0.5
 
 HEAD_ABOVE_NOSE_CM = 12.0
+EAR_TO_EAR_AVG_CM = 14.0
+INTER_PUPILLARY_AVG_CM = 6.3
 
 BMI_REF = 22.5
+
+MALE_BODY_RATIOS = {
+    "shoulder_to_hip_ratio": 1.15,
+    "chest_to_waist_ratio": 1.12,
+    "waist_to_hip_ratio": 0.85,
+    "fat_distribution_upper": 0.60,
+}
+
+FEMALE_BODY_RATIOS = {
+    "shoulder_to_hip_ratio": 0.92,
+    "chest_to_waist_ratio": 1.05,
+    "waist_to_hip_ratio": 0.72,
+    "fat_distribution_upper": 0.45,
+}
 
 MEASUREMENT_LABELS: dict[str, str] = {
     "head_circumference": "Обхват головы",
@@ -255,12 +281,98 @@ def _image_bytes_to_cv2(image_bytes: bytes) -> Optional[np.ndarray]:
         return None
 
 
-def run_mediapipe_pose(image_bytes: bytes) -> Optional[Landmarks]:
+def preprocess_image(image_bytes: bytes) -> Optional[np.ndarray]:
+    img = _image_bytes_to_cv2(image_bytes)
+    if img is None:
+        return None
+
+    if _REMBG_AVAILABLE:
+        try:
+            input_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            output_pil = rembg_remove(input_pil)
+            output_bytes = io.BytesIO()
+            output_pil.save(output_bytes, format="PNG")
+            output_bytes.seek(0)
+            arr = np.frombuffer(output_bytes.read(), dtype=np.uint8)
+            img_no_bg = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+            if img_no_bg is not None:
+                if img_no_bg.shape[2] == 4:
+                    b, g, r, a = cv2.split(img_no_bg)
+                    mask = (a > 128).astype(np.uint8) * 255
+                    img_no_bg = cv2.merge([b, g, r])
+                    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+                    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+                    mask_3ch = cv2.merge([mask, mask, mask])
+                    img_no_bg = cv2.bitwise_and(img_no_bg, mask_3ch)
+                    img = img_no_bg
+        except Exception as exc:
+            logger.warning("Background removal failed, using original: %s", exc)
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced_gray = clahe.apply(gray)
+    enhanced_bgr = cv2.cvtColor(enhanced_gray, cv2.COLOR_GRAY2BGR)
+
+    if img.shape[:2] != enhanced_bgr.shape[:2]:
+        enhanced_bgr = cv2.resize(enhanced_bgr, (img.shape[1], img.shape[0]))
+
+    mask = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(mask, 1, 255, cv2.THRESH_BINARY)
+    mask_3ch = cv2.merge([mask, mask, mask])
+    result = cv2.bitwise_and(enhanced_bgr, mask_3ch)
+
+    return result
+
+
+def preprocess_image(image_bytes: bytes) -> Optional[np.ndarray]:
+    img = _image_bytes_to_cv2(image_bytes)
+    if img is None:
+        return None
+
+    if _REMBG_AVAILABLE:
+        try:
+            input_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            output_pil = rembg_remove(input_pil)
+            output_bytes = io.BytesIO()
+            output_pil.save(output_bytes, format="PNG")
+            output_bytes.seek(0)
+            arr = np.frombuffer(output_bytes.read(), dtype=np.uint8)
+            img_no_bg = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+            if img_no_bg is not None:
+                if img_no_bg.shape[2] == 4:
+                    b, g, r, a = cv2.split(img_no_bg)
+                    mask = (a > 128).astype(np.uint8) * 255
+                    img_no_bg = cv2.merge([b, g, r])
+                    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+                    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+                    mask_3ch = cv2.merge([mask, mask, mask])
+                    img_no_bg = cv2.bitwise_and(img_no_bg, mask_3ch)
+                    img = img_no_bg
+        except Exception as exc:
+            logger.warning("Background removal failed, using original: %s", exc)
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced_gray = clahe.apply(gray)
+    enhanced_bgr = cv2.cvtColor(enhanced_gray, cv2.COLOR_GRAY2BGR)
+
+    if img.shape[:2] != enhanced_bgr.shape[:2]:
+        enhanced_bgr = cv2.resize(enhanced_bgr, (img.shape[1], img.shape[0]))
+
+    mask = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(mask, 1, 255, cv2.THRESH_BINARY)
+    mask_3ch = cv2.merge([mask, mask, mask])
+    result = cv2.bitwise_and(enhanced_bgr, mask_3ch)
+
+    return result
+
+
+def run_mediapipe_pose(image_bytes: bytes, preprocessed: Optional[np.ndarray] = None) -> Optional[Landmarks]:
     if not _MP_AVAILABLE:
         logger.warning("MediaPipe not installed, skipping pose detection")
         return None
 
-    img = _image_bytes_to_cv2(image_bytes)
+    img = preprocessed if preprocessed is not None else _image_bytes_to_cv2(image_bytes)
     if img is None:
         return None
 
@@ -270,7 +382,7 @@ def run_mediapipe_pose(image_bytes: bytes) -> Optional[Landmarks]:
         mp_pose = mp_pose_pkg.solutions.pose.Pose(
             static_image_mode=True,
             model_complexity=2,
-            min_detection_confidence=0.5,
+            min_detection_confidence=0.6,
         )
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         result = mp_pose.process(rgb)
@@ -288,6 +400,135 @@ def run_mediapipe_pose(image_bytes: bytes) -> Optional[Landmarks]:
     except Exception as exc:
         logger.warning("MediaPipe pose detection failed: %s", exc)
         return None
+
+
+@dataclass
+class PoseQualityReport:
+    is_valid: bool
+    score: float
+    issues: list[str] = field(default_factory=list)
+    details: dict[str, float] = field(default_factory=dict)
+
+
+def validate_pose_quality(landmarks: Landmarks, view: str = "front") -> PoseQualityReport:
+    issues: list[str] = []
+    details: dict[str, float] = {}
+    score = 1.0
+
+    nose = landmarks.get(0)
+    l_shoulder = landmarks.get(11)
+    r_shoulder = landmarks.get(12)
+    l_elbow = landmarks.get(13)
+    r_elbow = landmarks.get(14)
+    l_wrist = landmarks.get(15)
+    r_wrist = landmarks.get(16)
+    l_hip = landmarks.get(23)
+    r_hip = landmarks.get(24)
+    l_knee = landmarks.get(25)
+    r_knee = landmarks.get(26)
+    l_ankle = landmarks.get(27)
+    r_ankle = landmarks.get(28)
+
+    if view == "front":
+        if l_shoulder and r_shoulder and nose:
+            shoulder_mid_x = (l_shoulder[0] + r_shoulder[0]) / 2
+            x_offset = abs(shoulder_mid_x - nose[0])
+            shoulder_w = abs(l_shoulder[0] - r_shoulder[0])
+            if shoulder_w > 0:
+                rotation_ratio = x_offset / shoulder_w
+                details["body_rotation"] = rotation_ratio
+                if rotation_ratio > 0.15:
+                    issues.append("body is rotated (not facing camera directly)")
+                    score -= 0.2
+
+        if l_shoulder and l_wrist and l_hip:
+            wrist_above_shoulder = l_wrist[1] < l_shoulder[1]
+            details["left_arm_raised"] = 1.0 if wrist_above_shoulder else 0.0
+            if wrist_above_shoulder:
+                issues.append("left arm is raised (should be at sides)")
+                score -= 0.15
+
+        if r_shoulder and r_wrist and r_hip:
+            wrist_above_shoulder = r_wrist[1] < r_shoulder[1]
+            details["right_arm_raised"] = 1.0 if wrist_above_shoulder else 0.0
+            if wrist_above_shoulder:
+                issues.append("right arm is raised (should be at sides)")
+                score -= 0.15
+
+        if l_shoulder and l_wrist and l_elbow and l_hip:
+            arm_across_body = l_wrist[0] > l_shoulder[0] + abs(l_shoulder[0] - r_shoulder[0]) * 0.3
+            details["left_arm_across"] = 1.0 if arm_across_body else 0.0
+            if arm_across_body:
+                issues.append("left arm is across the body")
+                score -= 0.15
+
+        if r_shoulder and r_wrist and r_elbow and r_hip:
+            arm_across_body = r_wrist[0] < r_shoulder[0] - abs(l_shoulder[0] - r_shoulder[0]) * 0.3
+            details["right_arm_across"] = 1.0 if arm_across_body else 0.0
+            if arm_across_body:
+                issues.append("right arm is across the body")
+                score -= 0.15
+
+        if l_hip and r_hip and l_knee and r_knee:
+            l_knee_bent = abs(l_knee[0] - l_hip[0]) > abs(r_hip[0] - l_hip[0]) * 0.15
+            r_knee_bent = abs(r_knee[0] - r_hip[0]) > abs(r_hip[0] - l_hip[0]) * 0.15
+            details["leg_straightness"] = 1.0 - (float(l_knee_bent) + float(r_knee_bent)) / 2
+            if l_knee_bent:
+                issues.append("left leg is bent")
+                score -= 0.1
+            if r_knee_bent:
+                issues.append("right leg is bent")
+                score -= 0.1
+
+        if l_hip and r_hip and l_ankle and r_ankle:
+            hip_width = abs(r_hip[0] - l_hip[0])
+            l_ankle_offset = abs(l_ankle[0] - l_hip[0])
+            r_ankle_offset = abs(r_ankle[0] - r_hip[0])
+            if hip_width > 0:
+                stance_ratio = max(l_ankle_offset, r_ankle_offset) / hip_width
+                details["stance_width"] = stance_ratio
+                if stance_ratio > 0.5:
+                    issues.append("legs are spread wide (stand with feet together)")
+                    score -= 0.1
+
+    if l_shoulder and r_shoulder:
+        shoulder_y_diff = abs(l_shoulder[1] - r_shoulder[1])
+        shoulder_x_dist = abs(l_shoulder[0] - r_shoulder[0])
+        if shoulder_x_dist > 0:
+            tilt = shoulder_y_diff / shoulder_x_dist
+            details["shoulder_tilt"] = tilt
+            if tilt > 0.1:
+                issues.append("shoulders are tilted (stand straight)")
+                score -= 0.1
+
+    if l_hip and r_hip:
+        hip_y_diff = abs(l_hip[1] - r_hip[1])
+        hip_x_dist = abs(r_hip[0] - l_hip[0])
+        if hip_x_dist > 0:
+            hip_tilt = hip_y_diff / hip_x_dist
+            details["hip_tilt"] = hip_tilt
+            if hip_tilt > 0.1:
+                issues.append("hips are tilted (stand straight)")
+                score -= 0.1
+
+    visible_count = sum(
+        1 for idx in range(33)
+        if landmarks.points.get(idx) and landmarks.points[idx][2] >= MIN_LANDMARK_VISIBILITY
+    )
+    visibility_ratio = visible_count / 33.0
+    details["visibility_ratio"] = visibility_ratio
+    if visibility_ratio < 0.7:
+        issues.append(f"too many landmarks occluded ({visible_count}/33 visible)")
+        score -= 0.2
+
+    score = max(0.0, min(1.0, score))
+
+    return PoseQualityReport(
+        is_valid=len(issues) < 3 and score >= 0.5,
+        score=round(score, 2),
+        issues=issues,
+        details=details,
+    )
 
 
 def calibrate_scale(landmarks: Landmarks, height_cm: float) -> Optional[float]:
@@ -323,8 +564,27 @@ def calibrate_scale(landmarks: Landmarks, height_cm: float) -> Optional[float]:
         return None
 
     nose_to_ankle_cm = height_cm - HEAD_ABOVE_NOSE_CM
-    scale = nose_to_ankle_cm / nose_to_ankle_px
-    return scale
+    scale_primary = nose_to_ankle_cm / nose_to_ankle_px
+
+    l_ear = landmarks.get(7)
+    r_ear = landmarks.get(8)
+    if l_ear is not None and r_ear is not None:
+        ear_dist_px = math.dist(l_ear[:2], r_ear[:2])
+        if ear_dist_px > 5:
+            scale_ears = EAR_TO_EAR_AVG_CM / ear_dist_px
+            scale = scale_primary * 0.7 + scale_ears * 0.3
+            return scale
+
+    l_eye = landmarks.get(2)
+    r_eye = landmarks.get(5)
+    if l_eye is not None and r_eye is not None:
+        eye_dist_px = math.dist(l_eye[:2], r_eye[:2])
+        if eye_dist_px > 5:
+            scale_eyes = INTER_PUPILLARY_AVG_CM / eye_dist_px
+            scale = scale_primary * 0.8 + scale_eyes * 0.2
+            return scale
+
+    return scale_primary
 
 
 def ellipse_circumference(a: float, b: float) -> float:
@@ -334,11 +594,47 @@ def ellipse_circumference(a: float, b: float) -> float:
     return math.pi * (a + b) * (1 + (3 * h) / (10 + math.sqrt(4 - 3 * h)))
 
 
+def measure_body_contour_width_at_level(
+    image_bytes: bytes,
+    landmarks: Landmarks,
+    y_level: float,
+    scale: float,
+    tolerance_px: int = 10,
+) -> Optional[float]:
+    img = _image_bytes_to_cv2(image_bytes)
+    if img is None:
+        return None
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    y_pixel = int(y_level * landmarks.img_h)
+    y_pixel = max(0, min(landmarks.img_h - 1, y_pixel))
+
+    row = binary[y_pixel, :]
+
+    body_pixels = np.where(row == 255)[0]
+    if len(body_pixels) < 5:
+        return None
+
+    leftmost = body_pixels[0]
+    rightmost = body_pixels[-1]
+    width_px = rightmost - leftmost
+
+    if width_px < 10:
+        return None
+
+    return width_px * scale
+
+
 def calculate_cv_measurements(
     front: Landmarks,
     side: Landmarks,
     height_cm: float,
     weight_kg: Optional[float] = None,
+    gender: str = "unknown",
+    front_bytes: Optional[bytes] = None,
+    side_bytes: Optional[bytes] = None,
 ) -> dict[str, dict[str, Any]]:
     front_scale = calibrate_scale(front, height_cm)
     side_scale = calibrate_scale(side, height_cm)
@@ -352,6 +648,8 @@ def calculate_cv_measurements(
         logger.info("Using front scale for side photo")
 
     measurements: dict[str, dict[str, Any]] = {}
+
+    body_ratios = MALE_BODY_RATIOS if gender == "male" else (FEMALE_BODY_RATIOS if gender == "female" else None)
 
     neck_mid = front.midpoint(11, 12)
     mid_hip = front.get(23) or front.get(24)
@@ -417,17 +715,58 @@ def calculate_cv_measurements(
         chest_frac = 0.25
         under_bust_frac = 0.38
         waist_frac = 0.55
-        belly_frac = 0.50
+        belly_frac = 0.60
 
         chest_level_y = neck_y + torso_h * chest_frac
         under_bust_level_y = neck_y + torso_h * under_bust_frac
         waist_level_y = neck_y + torso_h * waist_frac
         belly_level_y = neck_y + torso_h * belly_frac
 
-        chest_width_px = shoulder_w_px * 0.72 if shoulder_w_px else None
-        chest_width_cm = chest_width_px * front_scale * 0.5 if chest_width_px else None
+        if body_ratios:
+            chest_width_factor = 0.78 if gender == "male" else 0.70
+            chest_depth_factor = 1.10 if gender == "male" else 1.18
+            waist_width_factor = 0.70 if gender == "male" else 0.78
+            waist_depth_factor = 0.75 if gender == "male" else 0.82
+            belly_width_factor = 0.78 if gender == "male" else 0.85
+            belly_depth_factor = 0.80 if gender == "male" else 0.88
+        else:
+            chest_width_factor = 0.72
+            chest_depth_factor = 1.15
+            waist_width_factor = 0.82
+            waist_depth_factor = 0.85
+            belly_width_factor = 0.90
+            belly_depth_factor = 0.92
 
-        chest_depth_cm = hip_depth * 1.15 if hip_depth else None
+        if front_bytes and side_bytes:
+            contour_chest_width = measure_body_contour_width_at_level(
+                front_bytes, front, chest_level_y, front_scale
+            )
+            contour_chest_depth = measure_body_contour_width_at_level(
+                side_bytes, side, chest_level_y, side_scale
+            )
+            contour_waist_width = measure_body_contour_width_at_level(
+                front_bytes, front, waist_level_y, front_scale
+            )
+            contour_waist_depth = measure_body_contour_width_at_level(
+                side_bytes, side, waist_level_y, side_scale
+            )
+        else:
+            contour_chest_width = contour_chest_depth = None
+            contour_waist_width = contour_waist_depth = None
+
+        if contour_chest_width and contour_chest_width > 5:
+            chest_width_cm = contour_chest_width / 2
+        elif shoulder_w_px:
+            chest_width_cm = shoulder_w_px * front_scale * 0.5 * chest_width_factor
+        else:
+            chest_width_cm = None
+
+        if contour_chest_depth and contour_chest_depth > 5:
+            chest_depth_cm = contour_chest_depth / 2
+        elif hip_depth:
+            chest_depth_cm = hip_depth * chest_depth_factor
+        else:
+            chest_depth_cm = None
 
         if chest_width_cm and chest_depth_cm:
             chest_circ = ellipse_circumference(chest_width_cm, chest_depth_cm)
@@ -443,8 +782,19 @@ def calculate_cv_measurements(
         else:
             under_bust_circ = None
 
-        waist_width_cm = hip_width * 0.82 if hip_width else None
-        waist_depth_cm = hip_depth * 0.85 if hip_depth else None
+        if contour_waist_width and contour_waist_width > 5:
+            waist_width_cm = contour_waist_width / 2
+        elif hip_width:
+            waist_width_cm = hip_width * waist_width_factor
+        else:
+            waist_width_cm = None
+
+        if contour_waist_depth and contour_waist_depth > 5:
+            waist_depth_cm = contour_waist_depth / 2
+        elif hip_depth:
+            waist_depth_cm = hip_depth * waist_depth_factor
+        else:
+            waist_depth_cm = None
 
         if waist_width_cm and waist_depth_cm:
             waist_circ = ellipse_circumference(waist_width_cm, waist_depth_cm)
@@ -453,8 +803,15 @@ def calculate_cv_measurements(
         else:
             waist_circ = None
 
-        belly_width_cm = hip_width * 0.90 if hip_width else None
-        belly_depth_cm = hip_depth * 0.92 if hip_depth else None
+        if hip_width:
+            belly_width_cm = hip_width * belly_width_factor
+        else:
+            belly_width_cm = None
+
+        if hip_depth:
+            belly_depth_cm = hip_depth * belly_depth_factor
+        else:
+            belly_depth_cm = None
 
         if belly_width_cm and belly_depth_cm:
             belly_circ = ellipse_circumference(belly_width_cm, belly_depth_cm)
@@ -502,24 +859,47 @@ def calculate_cv_measurements(
     else:
         head_circ = None
 
-    bicep_width_px = front.horizontal_dist(13, 13) if front.get(13) else None
     if hip_width and shoulder_width:
-        bicep_circ = (shoulder_width * 0.18 + hip_width * math.pi * 0.32) * 0.5
+        if gender == "male":
+            bicep_circ = shoulder_width * 0.22 + hip_width * 0.15
+        elif gender == "female":
+            bicep_circ = shoulder_width * 0.18 + hip_width * 0.18
+        else:
+            bicep_circ = (shoulder_width * 0.18 + hip_width * math.pi * 0.32) * 0.5
     else:
         bicep_circ = None
 
-    forearm_circ = bicep_circ * 0.84 if bicep_circ else None
-    wrist_circ = bicep_circ * 0.55 if bicep_circ else None
+    if gender == "male":
+        forearm_circ = bicep_circ * 0.78 if bicep_circ else None
+        wrist_circ = bicep_circ * 0.52 if bicep_circ else None
+    elif gender == "female":
+        forearm_circ = bicep_circ * 0.82 if bicep_circ else None
+        wrist_circ = bicep_circ * 0.58 if bicep_circ else None
+    else:
+        forearm_circ = bicep_circ * 0.84 if bicep_circ else None
+        wrist_circ = bicep_circ * 0.55 if bicep_circ else None
 
     if hip_width and hip_depth:
-        upper_thigh_circ = ellipse_circumference(hip_width * 0.55, hip_depth * 0.65)
+        if gender == "male":
+            upper_thigh_circ = ellipse_circumference(hip_width * 0.58, hip_depth * 0.62)
+        elif gender == "female":
+            upper_thigh_circ = ellipse_circumference(hip_width * 0.52, hip_depth * 0.68)
+        else:
+            upper_thigh_circ = ellipse_circumference(hip_width * 0.55, hip_depth * 0.65)
     elif hip_width:
         upper_thigh_circ = hip_width * math.pi * 1.2
     else:
         upper_thigh_circ = None
 
-    knee_circ = upper_thigh_circ * 0.60 if upper_thigh_circ else None
-    calf_circ = upper_thigh_circ * 0.63 if upper_thigh_circ else None
+    if gender == "male":
+        knee_circ = upper_thigh_circ * 0.55 if upper_thigh_circ else None
+        calf_circ = upper_thigh_circ * 0.60 if upper_thigh_circ else None
+    elif gender == "female":
+        knee_circ = upper_thigh_circ * 0.52 if upper_thigh_circ else None
+        calf_circ = upper_thigh_circ * 0.58 if upper_thigh_circ else None
+    else:
+        knee_circ = upper_thigh_circ * 0.60 if upper_thigh_circ else None
+        calf_circ = upper_thigh_circ * 0.63 if upper_thigh_circ else None
 
     inseam = full_leg_length * 0.88 if full_leg_length else None
 
@@ -605,13 +985,29 @@ def calculate_measurements(
     weight_kg: Optional[float] = None,
     front_bytes: Optional[bytes] = None,
     side_bytes: Optional[bytes] = None,
-) -> tuple[dict[str, dict[str, Any]], bool]:
+    gender: str = "unknown",
+) -> tuple[dict[str, dict[str, Any]], bool, dict[str, Any]]:
+    extra_info: dict[str, Any] = {"pose_issues": [], "pose_score": 0.0}
+
     if front_bytes and side_bytes and _MP_AVAILABLE:
-        front_lm = run_mediapipe_pose(front_bytes)
-        side_lm = run_mediapipe_pose(side_bytes)
+        front_pre = preprocess_image(front_bytes)
+        side_pre = preprocess_image(side_bytes)
+
+        front_lm = run_mediapipe_pose(front_bytes, front_pre)
+        side_lm = run_mediapipe_pose(side_bytes, side_pre)
 
         if front_lm is not None and side_lm is not None:
-            cv_result = calculate_cv_measurements(front_lm, side_lm, height_cm, weight_kg)
+            front_quality = validate_pose_quality(front_lm, "front")
+            side_quality = validate_pose_quality(side_lm, "side")
+
+            extra_info["pose_score"] = round((front_quality.score + side_quality.score) / 2, 2)
+            extra_info["pose_issues"] = front_quality.issues + side_quality.issues
+            extra_info["front_visibility"] = front_quality.details.get("visibility_ratio", 0)
+            extra_info["side_visibility"] = side_quality.details.get("visibility_ratio", 0)
+
+            cv_result = calculate_cv_measurements(
+                front_lm, side_lm, height_cm, weight_kg, gender, front_bytes, side_bytes
+            )
             if cv_result is not None:
                 formula = calculate_formula_measurements(height_cm, weight_kg)
                 for key, cv_val in cv_result.items():
@@ -620,7 +1016,7 @@ def calculate_measurements(
                     else:
                         cv_val["value"] = formula[key]["value"]
                         cv_val["method"] = "formula"
-                return cv_result, True
+                return cv_result, True, extra_info
             else:
                 logger.info("CV measurement calculation incomplete, using formulas")
 
@@ -630,17 +1026,27 @@ def calculate_measurements(
             logger.warning("MediaPipe: no pose detected in side photo")
 
     measurements = calculate_formula_measurements(height_cm, weight_kg)
-    return measurements, False
+    return measurements, False, extra_info
 
 
-def get_confidence(cv_detected: bool, has_weight: bool) -> float:
+def get_confidence(
+    cv_detected: bool,
+    has_weight: bool,
+    pose_score: float = 0.0,
+    visibility_ratio: float = 0.0,
+    gender_known: bool = False,
+) -> float:
     if cv_detected:
-        confidence = 0.82
+        base = 0.75
+        base += min(pose_score * 0.08, 0.08)
+        base += min(visibility_ratio * 0.07, 0.07)
         if has_weight:
-            confidence += 0.03
-        return min(confidence, 0.85)
+            base += 0.03
+        if gender_known:
+            base += 0.02
+        return round(min(base, 0.95), 2)
     else:
-        confidence = 0.55
+        base = 0.55
         if has_weight:
-            confidence += 0.10
-        return min(confidence, 0.65)
+            base += 0.10
+        return round(min(base, 0.65), 2)

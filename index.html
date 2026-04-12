@@ -456,6 +456,18 @@
       }
     }
 
+    function notifyParentSize() {
+      const size = sizeResult.textContent?.trim();
+      if (!size) return;
+      try {
+        if (window.parent !== window) {
+          window.parent.postMessage({ type: "fitvector:size", size }, "*");
+        }
+      } catch (_) {
+        /* ignore */
+      }
+    }
+
     async function onCalculateClick() {
       statusHint.textContent = "";
       setLoading(true);
@@ -467,9 +479,11 @@
 
         sizeResult.textContent = data.size;
         confidenceResult.textContent = `Уверенность: ${pct}% · метод: ${method}`;
+        notifyParentSize();
       } catch (err) {
         statusHint.textContent = "Пробуем локально...";
         renderLocalSize();
+        notifyParentSize();
         window.setTimeout(() => {
           statusHint.textContent = "";
         }, 3500);
