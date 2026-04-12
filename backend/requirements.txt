@@ -8,8 +8,3 @@ Pillow
 mediapipe
 opencv-python-headless
 numpy
-rembg
-onnxruntime
-rembg
-onnxruntime
-
