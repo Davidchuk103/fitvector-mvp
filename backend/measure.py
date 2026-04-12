@@ -53,6 +53,10 @@ HEAD_ABOVE_NOSE_CM = 12.0
 EAR_TO_EAR_AVG_CM = 14.0
 INTER_PUPILLARY_AVG_CM = 6.3
 
+HEAD_RATIO_MIN = 0.048
+HEAD_RATIO_MAX = 0.058
+HEAD_RATIO_DEFAULT = 0.052
+
 BMI_REF = 22.5
 
 MALE_BODY_RATIOS = {
@@ -520,28 +524,32 @@ def calibrate_scale(landmarks: Landmarks, height_cm: float) -> Optional[float]:
     if nose_to_ankle_px < 10:
         return None
 
-    nose_to_ankle_cm = height_cm - HEAD_ABOVE_NOSE_CM
+    nose_to_ankle_cm = height_cm * HEAD_RATIO_DEFAULT
     scale_primary = nose_to_ankle_cm / nose_to_ankle_px
 
+    debug_info = {"primary_scale": scale_primary, "method": "nose_ankle_ratio"}
+    
     l_ear = landmarks.get(7)
     r_ear = landmarks.get(8)
     if l_ear is not None and r_ear is not None:
-        ear_dist_px = math.dist(l_ear[:2], r_ear[:2])
+        ear_dist_px = math.dist(l_ear, r_ear)
         if ear_dist_px > 5:
             scale_ears = EAR_TO_EAR_AVG_CM / ear_dist_px
             scale = scale_primary * 0.7 + scale_ears * 0.3
-            return scale
+            debug_info = {"primary_scale": scale_primary, "ears_scale": scale_ears, "method": "nose_ankle_ears"}
+            return scale, debug_info
 
     l_eye = landmarks.get(2)
     r_eye = landmarks.get(5)
     if l_eye is not None and r_eye is not None:
-        eye_dist_px = math.dist(l_eye[:2], r_eye[:2])
+        eye_dist_px = math.dist(l_eye, r_eye)
         if eye_dist_px > 5:
             scale_eyes = INTER_PUPILLARY_AVG_CM / eye_dist_px
             scale = scale_primary * 0.8 + scale_eyes * 0.2
-            return scale
+            debug_info = {"primary_scale": scale_primary, "eyes_scale": scale_eyes, "method": "nose_ankle_eyes"}
+            return scale, debug_info
 
-    return scale_primary
+    return scale_primary, debug_info
 
 
 def ellipse_circumference(a: float, b: float) -> float:
@@ -556,32 +564,65 @@ def measure_body_contour_width_at_level(
     landmarks: Landmarks,
     y_level: float,
     scale: float,
-    tolerance_px: int = 10,
+    tolerance_px: int = 15,
 ) -> Optional[float]:
     img = _image_bytes_to_cv2(image_bytes)
     if img is None:
         return None
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
+    
     y_pixel = int(y_level * landmarks.img_h)
-    y_pixel = max(0, min(landmarks.img_h - 1, y_pixel))
-
-    row = binary[y_pixel, :]
-
-    body_pixels = np.where(row == 255)[0]
-    if len(body_pixels) < 5:
-        return None
-
-    leftmost = body_pixels[0]
-    rightmost = body_pixels[-1]
-    width_px = rightmost - leftmost
-
-    if width_px < 10:
-        return None
-
-    return width_px * scale
+    y_pixel = max(tolerance_px, min(landmarks.img_h - tolerance_px - 1, y_pixel))
+    
+    search_start = y_pixel - tolerance_px
+    search_end = y_pixel + tolerance_px
+    
+    method_used = "none"
+    best_width = 0
+    
+    for y in range(search_start, search_end + 1):
+        row = gray[y, :]
+        
+        edges = cv2.Canny(row, 30, 100)
+        edge_points = np.where(edges > 0)[0]
+        
+        if len(edge_points) >= 2:
+            left_edge = edge_points[0]
+            right_edge = edge_points[-1]
+            width = right_edge - left_edge
+            if width > best_width:
+                best_width = width
+                method_used = "canny_row"
+    
+    if best_width < 15:
+        blur = cv2.GaussianBlur(gray, (5, 5))
+        _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        for y in range(search_start, search_end + 1):
+            row = binary[y, :]
+            body_pixels = np.where(row == 255)[0]
+            if len(body_pixels) >= 2:
+                width = body_pixels[-1] - body_pixels[0]
+                if width > best_width:
+                    best_width = width
+                    method_used = "otsu_row"
+    
+    if best_width < 15:
+        blurred = cv2.GaussianBlur(gray, (9, 9), 2)
+        edges = cv2.Canny(blurred, 30, 100)
+        filled = cv2.dilate(edges, np.ones((3, 3), np.uint8))
+        
+        y_slice = filled[y_pixel, :]
+        body_pixels = np.where(filled[y_pixel, :] > 0)[0]
+        if len(body_pixels) >= 2:
+            best_width = body_pixels[-1] - body_pixels[0]
+            method_used = "canny_dilated"
+    
+    if best_width < 15:
+        return None, "none"
+    
+    return best_width * scale, method_used
 
 
 def calculate_cv_measurements(
@@ -593,12 +634,24 @@ def calculate_cv_measurements(
     front_bytes: Optional[bytes] = None,
     side_bytes: Optional[bytes] = None,
 ) -> dict[str, dict[str, Any]]:
-    front_scale = calibrate_scale(front, height_cm)
-    side_scale = calibrate_scale(side, height_cm)
+    front_scale_result = calibrate_scale(front, height_cm)
+    side_scale_result = calibrate_scale(side, height_cm)
 
-    if front_scale is None:
+    if front_scale_result is None:
         logger.warning("Cannot calibrate front photo scale")
         return None
+
+    if isinstance(front_scale_result, tuple):
+        front_scale, front_debug = front_scale_result
+    else:
+        front_scale = front_scale_result
+        front_debug = {"method": "nose_ankle_ratio"}
+
+    if isinstance(side_scale_result, tuple):
+        side_scale, side_debug = side_scale_result
+    else:
+        side_scale = side_scale_result
+        side_debug = {"method": "nose_ankle_ratio"}
 
     if side_scale is None:
         side_scale = front_scale
@@ -694,19 +747,32 @@ def calculate_cv_measurements(
             belly_width_factor = 0.90
             belly_depth_factor = 0.92
 
+        contour_method = "none"
+        
         if front_bytes and side_bytes:
-            contour_chest_width = measure_body_contour_width_at_level(
+            cw, cw_method = measure_body_contour_width_at_level(
                 front_bytes, front, chest_level_y, front_scale
             )
-            contour_chest_depth = measure_body_contour_width_at_level(
+            contour_chest_width = cw if cw else None
+            
+            cd, cd_method = measure_body_contour_width_at_level(
                 side_bytes, side, chest_level_y, side_scale
             )
-            contour_waist_width = measure_body_contour_width_at_level(
+            contour_chest_depth = cd if cd else None
+            
+            ww, ww_method = measure_body_contour_width_at_level(
                 front_bytes, front, waist_level_y, front_scale
             )
-            contour_waist_depth = measure_body_contour_width_at_level(
+            contour_waist_width = ww if ww else None
+            
+            wd, wd_method = measure_body_contour_width_at_level(
                 side_bytes, side, waist_level_y, side_scale
             )
+            contour_waist_depth = wd if wd else None
+            
+            contour_methods = [m for m in [cw_method, cd_method, ww_method, wd_method] if m != "none"]
+            if contour_methods:
+                contour_method = contour_methods[0]
         else:
             contour_chest_width = contour_chest_depth = None
             contour_waist_width = contour_waist_depth = None
@@ -898,7 +964,13 @@ def calculate_cv_measurements(
             "method": "cv",
         }
 
-    return measurements
+    debug_output = {
+        "scale_factor": round(front_scale, 4),
+        "scale_method": front_debug.get("method", "unknown"),
+        "contour_method": contour_method,
+    }
+    
+    return measurements, debug_output
 
 
 def calculate_formula_measurements(
@@ -966,14 +1038,21 @@ def calculate_measurements(
                 front_lm, side_lm, height_cm, weight_kg, gender, front_bytes, side_bytes
             )
             if cv_result is not None:
+                if isinstance(cv_result, tuple):
+                    measurements, debug_info = cv_result
+                else:
+                    measurements = cv_result
+                    debug_info = {"error": "no debug info"}
+                
                 formula = calculate_formula_measurements(height_cm, weight_kg)
-                for key, cv_val in cv_result.items():
+                for key, cv_val in measurements.items():
                     if cv_val["value"] is not None:
                         cv_val["method"] = "cv"
                     else:
                         cv_val["value"] = formula[key]["value"]
                         cv_val["method"] = "formula"
-                return cv_result, True, extra_info
+                extra_info.update(debug_info)
+                return measurements, True, extra_info
             else:
                 logger.info("CV measurement calculation incomplete, using formulas")
 
